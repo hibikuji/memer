@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ミーム登録＆発動画面</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/RecordRTC/5.6.2/RecordRTC.min.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #f5f6fa; }
+        .container { max-width: 400px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        input { width: 90%; padding: 10px; margin: 10px 0; font-size: 16px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        .file-label { display: block; text-align: left; margin-left: 5%; font-weight: bold; margin-top: 10px; font-size: 14px; }
+        .btn { width: 100%; padding: 20px; font-size: 18px; font-weight: bold; color: white; border: none; border-radius: 10px; cursor: pointer; user-select: none; touch-action: manipulation; margin-top: 20px; }
+        
+        /* 登録ボタンは赤、発動ボタンは青 */
+        #recordBtn { background-color: #ff4757; }
+        #recordBtn:active { background-color: #ff6b81; }
+        #triggerBtn { background-color: #1e90ff; }
+        #triggerBtn:active { background-color: #70a1ff; }
+        
+        .status { margin-top: 20px; color: #2f3542; font-weight: bold; }
+        .result-box { margin-top: 15px; padding: 15px; background-color: #f1f2f6; border-radius: 5px; text-align: left; font-size: 14px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>① 新しいミームを登録</h2>
+        <input type="text" id="meme_id" placeholder="ミームのID (例: meme01)">
+        <input type="text" id="text" placeholder="セリフ (例: 人の心とかないんか？)">
+        <span class="file-label">ミーム画像を選択:</span>
+        <input type="file" id="imageInput" accept="image/*">
+        <button id="recordBtn" class="btn">🎤 押している間だけ録音して登録</button>
+        <p id="regStatus" class="status">待機中...</p>
+    </div>
+
+    <div class="container">
+        <h2>② ミームを発動する</h2>
+        <p style="font-size: 12px; color: gray;">登録したセリフを喋ってDiscordに送ろう！</p>
+        <button id="triggerBtn" class="btn">🚀 押している間だけ録音して発動</button>
+        <p id="trigStatus" class="status">待機中...</p>
+        
+        <div id="resultBox" class="result-box"></div>
+    </div>
+
+    <script>
+        let recorder;
+        let microphone;
+        const recordBtn = document.getElementById('recordBtn');
+        const triggerBtn = document.getElementById('triggerBtn');
+        const regStatus = document.getElementById('regStatus');
+        const trigStatus = document.getElementById('trigStatus');
+        const resultBox = document.getElementById('resultBox');
+
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            microphone = stream;
+        }).catch(err => {
+            regStatus.innerText = "❌ マイクへのアクセスが拒否されました。";
+            trigStatus.innerText = "❌ マイクへのアクセスが拒否されました。";
+        });
+
+        // 録音開始の共通処理
+        const startRecording = (btn, statusText) => {
+            if (!microphone) return;
+            recorder = RecordRTC(microphone, { type: 'audio', recorderType: StereoAudioRecorder, desiredSampRate: 16000 });
+            recorder.startRecording();
+            statusText.innerText = "🔴 録音中... (話し終わったらボタンを離してね)";
+            btn.style.opacity = "0.7";
+        };
+
+        // 登録ボタンを離した時
+        const stopRecordingForReg = async (e) => {
+            e.preventDefault();
+            if (recorder && recorder.getState() === "recording") {
+                recorder.stopRecording(async () => {
+                    recordBtn.style.opacity = "1";
+                    regStatus.innerText = "送信中...サーバーで処理をしています⏳";
+                    
+                    const audioBlob = recorder.getBlob();
+                    const imageFile = document.getElementById('imageInput').files[0];
+                    if (!imageFile) { regStatus.innerText = "❌ 画像が選択されていません！"; return; }
+
+                    const formData = new FormData();
+                    formData.append("meme_id", document.getElementById('meme_id').value || "test_meme");
+                    formData.append("text", document.getElementById('text').value || "テスト");
+                    formData.append("audio", audioBlob, "record.wav");
+                    formData.append("image", imageFile);
+
+                    try {
+                        const response = await fetch("http://localhost:8000/register_meme/", { method: "POST", body: formData });
+                        const result = await response.json();
+                        regStatus.innerText = result.status === "success" ? "✅ " + result.message : "❌ " + result.message;
+                    } catch (e) {
+                        regStatus.innerText = "❌ 通信エラー: サーバーが起動しているか確認してください。";
+                    }
+                });
+            }
+        };
+
+        // 発動ボタンを離した時
+        const stopRecordingForTrig = async (e) => {
+            e.preventDefault();
+            if (recorder && recorder.getState() === "recording") {
+                recorder.stopRecording(async () => {
+                    triggerBtn.style.opacity = "1";
+                    trigStatus.innerText = "判定中...AIが声を分析しています⏳";
+                    resultBox.style.display = "none";
+                    
+                    const audioBlob = recorder.getBlob();
+                    const formData = new FormData();
+                    formData.append("audio", audioBlob, "trigger.wav");
+
+                    try {
+                        const response = await fetch("http://localhost:8000/trigger_meme/", { method: "POST", body: formData });
+                        const result = await response.json();
+                        
+                        if (result.status === "success") {
+                            // 成功か失敗かでメッセージを変える
+                            trigStatus.innerText = result.triggered 
+                                ? "🎉 ミーム発動成功！Discordを確認して！" 
+                                : "惜しい！発動条件（70%）を満たしませんでした。";
+                            
+                            // 判定の詳細を表示
+                            resultBox.style.display = "block";
+                            resultBox.innerHTML = `
+                                <strong>【判定結果詳細】</strong><br><br>
+                                🎤 認識されたセリフ: 「${result.recognized_text}」<br>
+                                🎯 セリフの一致度: <strong>${result.text_similarity}%</strong><br>
+                                🌊 波形・声質の一致度: <strong>${result.audio_confidence}%</strong>
+                            `;
+                        } else {
+                            trigStatus.innerText = "❌ エラー: " + result.message;
+                        }
+                    } catch (e) {
+                        trigStatus.innerText = "❌ 通信エラー: サーバーが起動しているか確認してください。";
+                    }
+                });
+            }
+        };
+
+        // イベントリスナーの登録（PC＆スマホ対応）
+        recordBtn.addEventListener('mousedown', (e) => { e.preventDefault(); startRecording(recordBtn, regStatus); });
+        recordBtn.addEventListener('mouseup', stopRecordingForReg);
+        recordBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(recordBtn, regStatus); }, {passive: false});
+        recordBtn.addEventListener('touchend', stopRecordingForReg, {passive: false});
+
+        triggerBtn.addEventListener('mousedown', (e) => { e.preventDefault(); startRecording(triggerBtn, trigStatus); });
+        triggerBtn.addEventListener('mouseup', stopRecordingForTrig);
+        triggerBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(triggerBtn, trigStatus); }, {passive: false});
+        triggerBtn.addEventListener('touchend', stopRecordingForTrig, {passive: false});
+    </script>
+</body>
+</html>

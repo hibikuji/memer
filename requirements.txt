@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+librosa
+numpy==1.26.4
+scipy
+scikit-learn
+joblib
+requests
+SpeechRecognition
